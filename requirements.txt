@@ -1,0 +1,23 @@
+# Interface Gráfica e Espectrograma
+PyQt6
+pyqtgraph
+
+# Processamento de Sinal e Áudio (DSP)
+numpy
+scipy
+sounddevice
+
+# Antena RTL-SDR
+pyrtlsdr
+
+# Transcrição (Speech-to-Text)
+openai-whisper
+torch
+
+# Inteligência Artificial Edge (LLM)
+ollama
+
+# Análise de Dados e Dashboards
+pandas
+matplotlib
+seaborn
