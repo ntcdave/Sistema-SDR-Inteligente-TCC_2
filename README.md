@@ -1,86 +1,109 @@
-📡 Sistema SDR Inteligente: Monitorização e Edge AI
+# 📡 Sistema SDR Inteligente: Monitorização e Edge AI
 
-Este repositório contém o código-fonte desenvolvido para o Trabalho de Conclusão de Curso (TCC) em Engenharia. O projeto consiste numa plataforma avançada de Inteligência de Sinais (SIGINT) que automatiza a captura, descodificação, transcrição e análise semântica de transmissões de rádio (FM) em tempo real.
+![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)
+![PyQt6](https://img.shields.io/badge/PyQt-6-green.svg)
+![Edge AI](https://img.shields.io/badge/Edge%20AI-Ollama%20%7C%20Whisper-orange)
+![TCC](https://img.shields.io/badge/Projeto-TCC-purple.svg)
 
-Todo o processamento é realizado localmente (Edge Computing), garantindo privacidade, segurança e autonomia face a serviços baseados na Cloud.
+> Plataforma avançada de Inteligência de Sinais (SIGINT) que automatiza a captura, descodificação, transcrição e análise semântica de transmissões de rádio (FM) em tempo real, utilizando processamento 100% local (Edge Computing).
 
-🛠️ Arquitetura do Sistema e Tecnologias
+Este repositório contém o código-fonte desenvolvido para o Trabalho de Conclusão de Curso (TCC) em Engenharia. O foco principal é garantir privacidade, segurança e autonomia, processando dados sem qualquer dependência de serviços na nuvem.
 
-A aplicação foi estruturada em três camadas principais: Processamento Digital de Sinal (DSP), Reconhecimento de Voz e Inteligência Artificial Semântica.
+*(Recomendamos a inclusão de uma imagem/screenshot da interface PyQt6 aqui)*
 
-1. Hardware e Motor DSP (Processamento de Sinal)
+---
 
-Hardware: Antena RTL-SDR Blog V4 (Chipset R828D). O repositório já inclui os drivers e bibliotecas estáticas (.dll e .lib) necessárias para comunicação nativa em Windows na pasta ferramentas/rtl-sdr/.
+## ✨ Funcionalidades Principais
 
-Motor DSP (Python): Utiliza numpy e scipy para realizar a decimação I/Q, filtragem passa-baixa (Butterworth), desmodulação FM matemática e aplicação de filtros De-Emphasis.
+- **📻 Motor DSP Customizado:** Desmodulação de rádio FM em tempo real com numpy e scipy, aplicando decimação matemática e filtros Butterworth/De-Emphasis.
+- **🎙️ Transcrição Offline (Speech-to-Text):** Conversão de áudio com ruídos em texto estruturado usando o modelo OpenAI Whisper (`base`).
+- **🧠 Inteligência Analítica (LLM):** Classificação, extração de entidades e resumos usando Meta Llama 3.2 (1B) rodando localmente no Ollama.
+- **📊 Dashboards Automáticos:** Geração de relatórios analíticos, gráficos de desempenho e linha do tempo de captações.
+- **🖥️ Interface Gráfica Responsiva:** Desenvolvida em PyQt6 com visualização de espectro de radiofrequência em tempo real.
 
-Buffer de Áudio: O áudio desmodulado é gerido pela biblioteca sounddevice, utilizando uma latência preventiva que impede estrangulamentos (stutters) na interface.
+---
 
-2. Transcrição Automática (Speech-to-Text)
+## 🛠️ Tecnologias Utilizadas
 
-A plataforma guarda o áudio da rádio em blocos contínuos de 30 segundos (chunks). Estes ficheiros .wav são passados para o primeiro modelo de Inteligência Artificial:
+- **Interface:** `PyQt6`, `pyqtgraph`
+- **DSP e Áudio:** `numpy`, `scipy`, `sounddevice`, hardware RTL-SDR Blog V4
+- **Inteligência Artificial:** `openai-whisper` (PyTorch), `ollama` (Llama 3.2 1B)
+- **Análise de Dados:** `pandas`, `matplotlib`, `seaborn`
 
-Modelo Utilizado: OpenAI Whisper (Versão: base)
+---
 
-O que é descarregado? Ao executar a transcrição pela primeira vez, o código descarrega automaticamente os pesos do modelo (base.pt, com cerca de ~140MB) para a cache da sua máquina.
+## 🚀 Como Instalar e Executar
 
-Função: Converte o áudio com estática e ruído de rádio em texto limpo e estruturado.
+### Pré-requisitos Obrigatórios
+1. **Python 3.10 ou superior:** Instalado no sistema.
+2. **FFmpeg:** Obrigatório para o Whisper. Instale e garanta que está [adicionado ao PATH do Windows](https://phoenixnap.com/kb/ffmpeg-windows).
+3. **Antena RTL-SDR:** Conectada via USB. Você deve instalar os drivers WinUSB corretos usando o software [Zadig](https://zadig.akeo.ie/).
+4. **Ollama:** Instale o [Ollama](https://ollama.com/) e deixe o servidor rodando em segundo plano.
 
-3. Análise Semântica (Edge LLM)
+### Passo a Passo
 
-Os textos transcritos são analisados num painel analítico alimentado por um Large Language Model otimizado para hardware limitado:
+**1. Clonar o Repositório:**
+```bash
+git clone https://github.com/ntcdave/Sistema-SDR-Inteligente-TCC_2.git
+cd Sistema-SDR-Inteligente-TCC_2
+```
 
-Modelo Utilizado: Meta Llama 3.2 (Versão: 1B) via servidor local Ollama.
-
-O que é descarregado? Requer a instalação do Ollama e a execução do comando ollama pull llama3.2:1b (descarrega o modelo comprimido de aproximadamente ~1.3GB).
-
-Função: O Llama 3.2 lê o texto transcrito, avalia o contexto, classifica a transmissão (ex: Música, Jornalismo, Trânsito), elabora um resumo tático e extrai entidades cruciais (Locais, Pessoas e Marcas).
-
-🚀 Como Instalar e Executar
-
-Pré-requisitos
-
-Python 3.10 ou superior: Instalado no sistema.
-
-Antena RTL-SDR: Conectada via USB e com os drivers WinUSB instalados através do software Zadig.
-
-Servidor Ollama: Instale o Ollama e deixe-o a correr em segundo plano.
-
-Passo a Passo
-
-Clonar o Repositório:
-
-git clone [https://github.com/ThayBellona/projeto_tcc_sdr.git](https://github.com/ThayBellona/projeto_tcc_sdr.git)
-cd projeto_tcc_sdr
-
-
-Instalar Dependências:
-Instale todas as bibliotecas necessárias listadas no requirements.txt:
-
+**2. Instalar Dependências:**
+Recomendamos o uso de um ambiente virtual (venv).
+```bash
 pip install -r requirements.txt
+```
 
-
-Descarregar o Modelo de Análise (Llama 3.2):
-
+**3. Descarregar os Modelos de IA:**
+O modelo Whisper (`base`) será baixado automaticamente na primeira execução (~140MB). Para a análise semântica, baixe o modelo Llama via Ollama:
+```bash
 ollama pull llama3.2:1b
+```
 
-
-Iniciar a Interface Gráfica:
-Com a antena ligada e configurada, execute a aplicação principal:
-
+**4. Iniciar a Aplicação:**
+Com a antena ligada e configurada, execute:
+```bash
 python app.py
+```
 
+---
 
-📂 Organização do Repositório
+## 📂 Organização do Projeto
 
-app.py: Interface principal desenvolvida em PyQt6. Gere a linha de montagem: antena, áudio ao vivo e captura de chunks.
+```text
+projeto/
+├── app.py                  # Interface principal (PyQt6) e motor DSP
+├── requirements.txt        # Lista de dependências Python
+├── src/
+│   ├── transcricao.py      # Interação com o OpenAI Whisper (STT)
+│   ├── analise.py          # Interrogador do Llama 3.2 e gerador de gráficos
+│   └── captura.py          # Módulo legado de processamento
+├── dados/                  # Banco de dados CSVs, relatórios e chunks (.wav)
+└── ferramentas/rtl-sdr/    # DLLs e utilitários da RTL-SDR para Windows
+```
 
-src/transcricao.py: Classe responsável por interagir com a API local do Whisper.
+---
 
-src/analise.py: Motor analítico. Interroga o Llama 3.2, mede picos de Memória RAM e tempos de processamento (tracemalloc), e desenha dashboards complexos usando matplotlib e seaborn.
+## 📖 Documentação Técnica Avançada
 
-dados/banco_dados/: Onde são gerados os ficheiros .csv que funcionam como a memória persistente das captações de rádio.
+Para entender a fundo a arquitetura do projeto, fluxo de dados do Processamento Digital de Sinal (DSP), padrões de projeto aplicados e pontos de extensibilidade, consulte a nossa documentação completa:
 
-ferramentas/rtl-sdr/: Condensador de ferramentas auxiliares e bibliotecas de acesso direto ao SDR.
+👉 **[Ler a Especificação Completa (SPEC.me)](./SPEC.me)**
 
-Trabalho académico desenvolvido para investigar a implementação de técnicas de Edge AI aplicadas a Radiofrequência e processamento DSP em tempo real.
+---
+
+## 🤝 Contribuição e Resolução de Problemas (Troubleshooting)
+
+Este projeto é **Open Source**! A comunidade é muito bem-vinda para explorar o código, abrir Issues para reportar problemas ou sugerir melhorias através de Pull Requests. 
+
+Caso encontre alguma dificuldade inicial na execução, confira as soluções para os problemas mais comuns relatados pela comunidade:
+
+- **Erro na biblioteca RTL-SDR:** Verifique se a pasta `ferramentas/rtl-sdr/` contém a `rtlsdr.dll` e se você configurou os drivers corretos usando o Zadig. (Usuários Linux/macOS podem precisar compilar a biblioteca localmente).
+- **Falha ao Transcrever Áudio:** Se a aplicação apresentar erros durante o Whisper, o `ffmpeg` provavelmente não foi encontrado pelo sistema. Assegure-se de que ele está instalado e configurado no PATH.
+- **Análise Semântica não inicia:** A IA necessita do servidor Ollama ativo. Verifique se o `ollama serve` está sendo executado em segundo plano.
+
+Sentiu falta de alguma funcionalidade ou conseguiu resolver um bug diferente? **Contribua com o projeto abrindo uma Pull Request!**
+
+---
+
+> *Trabalho académico desenvolvido para investigar a implementação de técnicas de Edge AI aplicadas a Radiofrequência e processamento DSP em tempo real.*
