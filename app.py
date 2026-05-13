@@ -2,10 +2,12 @@ import sys
 import os
 import time
 import threading
-import wave 
+import wave
+import queue
 import numpy as np
 import sounddevice as sd
 import scipy.signal as signal
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 # --- CONFIGURAÇÃO DE CAMINHOS ---
@@ -56,9 +58,23 @@ class MainWindow(QMainWindow):
         self.sdr = None
         self.stream_audio = None
         
-        self.buffer_audio = np.array([], dtype=np.float32)
-        self.lock_audio = threading.Lock()
-        self.buffer_ia = [] 
+        # --- RING BUFFER SPSC SEM LOCK (4 segundos @ 32kHz) ---
+        # Single-Producer (thread DSP) / Single-Consumer (callback do driver de áudio)
+        # Não requer lock: produtor escreve dados ANTES de avançar ring_write;
+        # consumidor lê ring_write apenas uma vez por callback.
+        self.TAMANHO_RING = 128000  # 4s @ 32kHz — margem contra underrun
+        self.ring_buffer = np.zeros(self.TAMANHO_RING, dtype=np.float32)
+        self.ring_write = 0   # escrito apenas pela thread DSP
+        self.ring_read  = 0   # escrito apenas pelo callback do driver
+        # ring_count não é mais necessário — o espaço disponível é derivado dos ponteiros
+        self.lock_audio = threading.Lock()  # mantido apenas para reset no toggle_audio
+        self.buffer_ia = []
+        
+        # --- POOL DE THREADS PARA TRANSCRIÇÃO (máx. 2 simultâneas) ---
+        self.pool_chunks = ThreadPoolExecutor(max_workers=2, thread_name_prefix="whisper")
+        
+        # --- EIXO DE FREQUÊNCIAS PRÉ-ALOCADO (fixo, calculado uma vez) ---
+        self._freq_axis = np.linspace(-0.512, 0.512, 4096)
         
         self.timer_grafico = QTimer()
         self.timer_grafico.timeout.connect(self.atualizar_grafico)
@@ -69,13 +85,32 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.hardware_rodando = False
-        time.sleep(0.3)
-        if self.stream_audio: 
-            try: self.stream_audio.stop()
-            except: pass
-        if self.sdr: 
-            try: self.sdr.close()
-            except: pass
+        self.gravando_ia = False
+        
+        # Espera o loop DSP terminar
+        time.sleep(0.5)
+        
+        # Encerra pool de threads de transcrição
+        if hasattr(self, 'pool_chunks'):
+            self.pool_chunks.shutdown(wait=False)
+        
+        # Fecha stream de áudio
+        if self.stream_audio:
+            try:
+                self.stream_audio.stop()
+                self.stream_audio.close()
+            except Exception:
+                pass
+        
+        # Libera dispositivo SDR
+        if self.sdr:
+            try:
+                self.sdr.close()
+            except Exception:
+                pass
+        
+        self.sdr = None
+        self.stream_audio = None
         event.accept()
 
     # ==============================================================================
@@ -275,109 +310,181 @@ class MainWindow(QMainWindow):
         self.ouvindo_audio = not self.ouvindo_audio
         self.btn_audio.setText("⏹️ Parar Áudio" if self.ouvindo_audio else "▶️ Ouvir Áudio ao Vivo")
         if self.ouvindo_audio:
-            with self.lock_audio: self.buffer_audio = np.array([], dtype=np.float32)
+            # Reset atômico: para o consumidor brevemente enquanto reinicia ponteiros
+            with self.lock_audio:
+                self.ring_buffer.fill(0)
+                self.ring_write = 0
+                self.ring_read  = 0
 
     # ==============================================================================
     # SDR E PROCESSAMENTO (O MOTOR RÁPIDO E FLUIDO)
     # ==============================================================================
     def callback_audio(self, out, frames, time_info, status):
-        with self.lock_audio:
-            if len(self.buffer_audio) >= frames:
-                out[:, 0] = self.buffer_audio[:frames]
-                self.buffer_audio = self.buffer_audio[frames:]
+        # SPSC lock-free: lê ring_write uma vez (snapshot), nunca bloqueia
+        wr = self.ring_write
+        rd = self.ring_read
+        disponivel = (wr - rd) % self.TAMANHO_RING
+        if disponivel >= frames:
+            end = rd + frames
+            if end <= self.TAMANHO_RING:
+                out[:, 0] = self.ring_buffer[rd:end]
             else:
-                out.fill(0)
+                parte1 = self.TAMANHO_RING - rd
+                out[:parte1, 0] = self.ring_buffer[rd:]
+                out[parte1:frames, 0] = self.ring_buffer[:frames - parte1]
+            # Avança o ponteiro de leitura APÓS copiar os dados
+            self.ring_read = (rd + frames) % self.TAMANHO_RING
+        else:
+            # Buffer underrun — silêncio; log para diagnóstico
+            out.fill(0)
+            if status:
+                print(f"[AUDIO] underrun: disponível={disponivel} frames={frames}")
 
     def iniciar_hardware_background(self):
-        self.timer_grafico.start(50) 
-        threading.Thread(target=self.thread_master_loop, daemon=True).start()
+        self.timer_grafico.start(120)  # ~8 FPS — perceptualmente idêntico para espectro
+        # Fila de IQ bruto entre a thread SDR (bloqueante USB) e a thread DSP
+        self._iq_queue = queue.Queue(maxsize=4)  # no máximo 4 blocos pendentes
+        threading.Thread(target=self._thread_sdr_reader, daemon=True).start()
+        threading.Thread(target=self._thread_dsp_worker, daemon=True).start()
 
-    def thread_master_loop(self):
+    # --------------------------------------------------------------------------
+    # THREAD 1 — Leitura SDR (bloqueante USB, ~250ms por ciclo)
+    # Única responsabilidade: ler amostras e empurrar para a fila IQ.
+    # Nunca faz DSP. Assim o DSP nunca fica parado esperando o USB.
+    # --------------------------------------------------------------------------
+    def _thread_sdr_reader(self):
         try:
             self.sdr = RtlSdr()
             self.sdr.sample_rate = 1024000
             self.sdr.center_freq = self.frequencia_atual * 1e6
-            
-            # Sincroniza o ganho de arranque com os degraus de hardware
+
             try:
                 self.sdr.set_manual_gain_enabled(True)
                 ganhos_validos = self.sdr.valid_gains_db
                 ganho_real = min(ganhos_validos, key=lambda x: abs(x - self.ganho_atual))
                 self.sdr.gain = ganho_real
                 QTimer.singleShot(0, lambda: self.label_ganho.setText(f"{ganho_real} dB"))
-            except: 
+            except:
                 pass
-            
-            taxa_original = 1024000
-            decimacao_iq = 4
-            decimacao_audio = 8
-            taxa_audio = (taxa_original // decimacao_iq) // decimacao_audio # 32000 Hz
-            tamanho_bloco = 102400 
-            
-            dt = 1.0 / taxa_audio
-            alpha = dt / (75e-6 + dt) 
-            b_deemp = [alpha]
-            a_deemp = [1.0, -(1.0 - alpha)]
-            zi_deemp = signal.lfilter_zi(b_deemp, a_deemp) * 0.0 
-            
-            banda_filtro_memoria = 0
-            b_band, a_band, zi_band = None, None, None
-            ultimo_iq = 0j 
 
-            self.stream_audio = sd.OutputStream(
-                samplerate=taxa_audio, channels=1, dtype='float32', 
-                blocksize=0, callback=self.callback_audio
-            )
-            self.stream_audio.start()
-            
+            # 256k samples @ 1024 kS/s → ~250ms de bloqueio USB por leitura
+            # Produz 256k/4/8 = 8000 samples de áudio @ 32kHz = 250ms de áudio
+            # Taxa de produção == taxa de consumo → buffer estável
+            TAMANHO_BLOCO_SDR = 262144  # múltiplo de 16384 (exigido pelo rtl-sdr)
+
             while self.hardware_rodando:
-                if not self.sdr: break
-                
+                if not self.sdr:
+                    break
                 try:
-                    amostras = self.sdr.read_samples(tamanho_bloco)
-                    self.dados_grafico = amostras 
-
-                    if self.ouvindo_audio or self.gravando_ia:
-                        iq_256k = amostras.reshape(-1, decimacao_iq).mean(axis=1)
-
-                        if self.banda_atual != banda_filtro_memoria:
-                            banda_filtro_memoria = self.banda_atual
-                            cutoff = min(banda_filtro_memoria / 2.0, 127000.0)
-                            b_band, a_band = signal.butter(3, cutoff / 128000.0, btype='low')
-                            zi_band = signal.lfilter_zi(b_band, a_band) * iq_256k[0]
-
-                        iq_filtrado, zi_band = signal.lfilter(b_band, a_band, iq_256k, zi=zi_band)
-
-                        iq_completo = np.insert(iq_filtrado, 0, ultimo_iq)
-                        ultimo_iq = iq_filtrado[-1]
-                        demodulado = np.angle(iq_completo[1:] * np.conj(iq_completo[:-1]))
-                        
-                        audio_cru = demodulado.reshape(-1, decimacao_audio).mean(axis=1)
-                        audio_filtrado_final, zi_deemp = signal.lfilter(b_deemp, a_deemp, audio_cru, zi=zi_deemp)
-                        audio_final = (audio_filtrado_final * self.volume_atual * 0.5).astype(np.float32)
-                        
-                        if self.ouvindo_audio:
-                            with self.lock_audio:
-                                self.buffer_audio = np.append(self.buffer_audio, audio_final)
-                                if len(self.buffer_audio) > taxa_audio * 2: 
-                                    self.buffer_audio = self.buffer_audio[-taxa_audio:]
-                        
-                        if self.gravando_ia:
-                            self.buffer_ia.append(audio_final)
-                            if len(self.buffer_ia) >= 300: 
-                                fatia = np.concatenate(self.buffer_ia[:300])
-                                self.buffer_ia = self.buffer_ia[300:] 
-                                threading.Thread(target=self.processar_chunk, args=(fatia,), daemon=True).start()
-                                self.verificar_termino()
-                except Exception as e:
+                    amostras = self.sdr.read_samples(TAMANHO_BLOCO_SDR)
+                    # Expõe para o gráfico (sem cópia — apenas referência)
+                    self.dados_grafico = amostras
+                    # Envia para DSP; descarta se a fila estiver cheia (evita acúmulo)
+                    try:
+                        self._iq_queue.put_nowait(amostras)
+                    except queue.Full:
+                        pass  # DSP não está a acompanhar; descarta bloco antigo
+                except Exception:
                     pass
         except Exception as e:
             QTimer.singleShot(0, lambda: self.caixa_texto.setText(f"Erro Antena: {e}"))
 
+    # --------------------------------------------------------------------------
+    # THREAD 2 — DSP Worker (filtragem + demodulação + escrita no ring buffer)
+    # Consome amostras IQ da fila, nunca bloqueia em USB.
+    # --------------------------------------------------------------------------
+    def _thread_dsp_worker(self):
+        # Aguarda o SDR inicializar (stream de áudio precisa de taxa_audio)
+        taxa_original  = 1024000
+        decimacao_iq   = 4
+        decimacao_audio = 8
+        taxa_audio = (taxa_original // decimacao_iq) // decimacao_audio  # 32000 Hz
+
+        dt    = 1.0 / taxa_audio
+        alpha = dt / (75e-6 + dt)
+        b_deemp = [alpha]
+        a_deemp = [1.0, -(1.0 - alpha)]
+        zi_deemp = signal.lfilter_zi(b_deemp, a_deemp) * 0.0
+
+        banda_filtro_memoria = 0
+        b_band, a_band, zi_band = None, None, None
+        _prev_iq = np.array([0j], dtype=complex)
+
+        # Inicia o stream de áudio aqui (mesma thread que vai escrever no ring)
+        self.stream_audio = sd.OutputStream(
+            samplerate=taxa_audio,
+            channels=1,
+            dtype='float32',
+            blocksize=2048,   # ~64ms @ 32kHz — equilíbrio entre latência e estabilidade
+            callback=self.callback_audio,
+            latency='high',   # permite ao driver usar buffers internos maiores
+        )
+        self.stream_audio.start()
+
+        while self.hardware_rodando:
+            try:
+                # Bloqueia no máximo 1s; se não vier amostra, volta ao topo
+                amostras = self._iq_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+
+            try:
+                if not (self.ouvindo_audio or self.gravando_ia):
+                    continue
+
+                iq_256k = amostras[::decimacao_iq]
+
+                if self.banda_atual != banda_filtro_memoria:
+                    banda_filtro_memoria = self.banda_atual
+                    cutoff = min(banda_filtro_memoria / 2.0, 127000.0)
+                    b_band, a_band = signal.butter(3, cutoff / 128000.0, btype='low')
+                    zi_band = signal.lfilter_zi(b_band, a_band) * iq_256k[0]
+
+                iq_filtrado, zi_band = signal.lfilter(b_band, a_band, iq_256k, zi=zi_band)
+
+                iq_completo = np.concatenate((_prev_iq, iq_filtrado))
+                _prev_iq[0]  = iq_filtrado[-1]
+                demodulado   = np.angle(iq_completo[1:] * np.conj(iq_completo[:-1]))
+
+                audio_cru = demodulado[::decimacao_audio]
+                audio_filtrado_final, zi_deemp = signal.lfilter(b_deemp, a_deemp, audio_cru, zi=zi_deemp)
+                audio_final = (audio_filtrado_final * self.volume_atual * 0.5).astype(np.float32)
+
+                if self.ouvindo_audio:
+                    n  = len(audio_final)
+                    wr = self.ring_write
+                    # Calcula espaço livre ANTES de escrever
+                    rd = self.ring_read
+                    espaco_livre = (rd - wr - 1) % self.TAMANHO_RING
+                    if n > espaco_livre:
+                        # Overflow: avança read para abrir espaço (descarta mais antigo)
+                        excesso = n - espaco_livre
+                        self.ring_read = (rd + excesso) % self.TAMANHO_RING
+                    # Escreve dados no ring ANTES de atualizar ring_write
+                    end = wr + n
+                    if end <= self.TAMANHO_RING:
+                        self.ring_buffer[wr:end] = audio_final
+                    else:
+                        parte1 = self.TAMANHO_RING - wr
+                        self.ring_buffer[wr:]      = audio_final[:parte1]
+                        self.ring_buffer[:n-parte1] = audio_final[parte1:]
+                    # Publica o novo ponteiro — o callback verá dados válidos
+                    self.ring_write = (wr + n) % self.TAMANHO_RING
+
+                if self.gravando_ia:
+                    self.buffer_ia.append(audio_final)
+                    if len(self.buffer_ia) >= 300:
+                        fatia = np.concatenate(self.buffer_ia[:300])
+                        self.buffer_ia = self.buffer_ia[300:]
+                        self.pool_chunks.submit(self.processar_chunk, fatia)
+                        self.verificar_termino()
+            except Exception:
+                pass
+
     def atualizar_grafico(self):
         if self.dados_grafico is not None:
             psd = 10 * np.log10(np.abs(np.fft.fftshift(np.fft.fft(self.dados_grafico[:4096])))**2)
-            f = np.linspace(self.frequencia_atual - 0.512, self.frequencia_atual + 0.512, 4096)
+            f = self._freq_axis + self.frequencia_atual
             self.curva_sinal.setData(f, psd)
 
     # ==============================================================================

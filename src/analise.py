@@ -223,8 +223,16 @@ class CientistaSDR:
         gc.collect()
 
         print(f"✅ Figuras e Métricas guardadas com sucesso!")
-        try: os.startfile(CAMINHO_GRAFICOS)
-        except: pass
+        import subprocess, platform
+        try:
+            if platform.system() == 'Windows':
+                os.startfile(CAMINHO_GRAFICOS)
+            elif platform.system() == 'Darwin':
+                subprocess.Popen(['open', CAMINHO_GRAFICOS])
+            else:
+                subprocess.Popen(['xdg-open', CAMINHO_GRAFICOS])
+        except Exception:
+            pass
 
     def executar_analise(self, limite=5):
         # Utiliza o ficheiro escolhido pelo utilizador
