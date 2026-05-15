@@ -239,8 +239,19 @@ class CientistaSDR:
         if not os.path.exists(self.caminho_csv):
             raise Exception(f"Banco de dados não encontrado em {self.caminho_csv}")
             
-        df_completo = pd.read_csv(self.caminho_csv) 
-        ultimos = df_completo.tail(limite) 
+        # Lê o CSV detectando automaticamente se existe ou não cabeçalho.
+        # O CSV mais antigo foi gravado sem cabeçalho; versões novas já têm.
+        _COLUNAS = ['Data_Hora', 'Frequencia_MHz', 'Caminho_Audio', 'Texto_Transcrito']
+        _df_teste = pd.read_csv(self.caminho_csv, nrows=1, header=None)
+        primeira_celula = str(_df_teste.iloc[0, 0])
+        # Se a primeira célula for "Data_Hora" (cabeçalho textual), lê normalmente;
+        # caso contrário, o arquivo não tem cabeçalho e atribuímos os nomes.
+        if primeira_celula.strip() == 'Data_Hora':
+            df_completo = pd.read_csv(self.caminho_csv)
+        else:
+            df_completo = pd.read_csv(self.caminho_csv, header=None, names=_COLUNAS)
+
+        ultimos = df_completo.tail(limite)
         
         nome_ficheiro = os.path.basename(self.caminho_csv)
         print(f"\n📡 MONITORAMENTO INTELIGENTE (Analisando ficheiro: {nome_ficheiro})\n" + "="*80)
