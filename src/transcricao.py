@@ -1,7 +1,15 @@
 import whisper
 import os
 import csv
+import sys
 from datetime import datetime
+
+# Garante que o diretório raiz do projeto está no path para importar config
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from config import CAMINHO_CSV, CAMINHO_BANCO  # noqa: E402
 
 class TranscritorSDR:
     """
@@ -11,13 +19,10 @@ class TranscritorSDR:
     def __init__(self, modelo_tamanho="base"):
         print(f"🧠 Carregando o modelo Whisper ({modelo_tamanho})...")
         self.modelo = whisper.load_model(modelo_tamanho)
-        
-        # Garante que a pasta de dados existe
-        self.pasta_dados = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'dados'))
-        os.makedirs(self.pasta_dados, exist_ok=True)
-        
-        # Cria a base de dados CSV
-        self.arquivo_csv = os.path.join(self.pasta_dados, 'banco_transcricoes.csv')
+
+        # Usa o caminho centralizado do config.py (fonte única de verdade)
+        os.makedirs(CAMINHO_BANCO, exist_ok=True)
+        self.arquivo_csv = CAMINHO_CSV
         self._inicializar_csv()
 
     def _inicializar_csv(self):
