@@ -15,18 +15,18 @@ Este repositório contém o código-fonte desenvolvido para o Trabalho de Conclu
 
 ## ✨ Funcionalidades Principais
 
-- **📻 Motor DSP Customizado:** Desmodulação de rádio FM em tempo real com numpy e scipy, aplicando decimação matemática e filtros Butterworth/De-Emphasis.
+- **📻 Motor DSP Customizado:** Desmodulação de rádio FM em tempo real com numpy e scipy, aplicando decimação matemática e filtros Butterworth/De-Emphasis de forma multi-thread, com suporte robusto a desconexões de hardware.
 - **🎙️ Transcrição Offline (Speech-to-Text):** Conversão de áudio com ruídos em texto estruturado usando o modelo OpenAI Whisper (`base`).
 - **🧠 Inteligência Analítica (LLM):** Classificação, extração de entidades e resumos usando Meta Llama 3.2 (1B) rodando localmente no Ollama.
-- **📊 Dashboards Automáticos:** Geração de relatórios analíticos, gráficos de desempenho e linha do tempo de captações.
-- **🖥️ Interface Gráfica Responsiva:** Desenvolvida em PyQt6 com visualização de espectro de radiofrequência em tempo real.
+- **📊 Dashboards Automáticos:** Geração de relatórios analíticos, gráficos de desempenho e linha do tempo de captações. Suporta retrocompatibilidade automática com bancos de dados legados (CSV sem cabeçalho).
+- **🖥️ Interface Gráfica Responsiva:** Desenvolvida em PyQt6 com visualização de espectro de radiofrequência em tempo real, isolando as threads de UI, DSP e Whisper para garantir fluidez.
 
 ---
 
 ## 🛠️ Tecnologias Utilizadas
 
 - **Interface:** `PyQt6`, `pyqtgraph`
-- **DSP e Áudio:** `numpy`, `scipy`, `sounddevice`, hardware RTL-SDR Blog V4
+- **DSP e Áudio:** `numpy`, `scipy`, `sounddevice`, hardware RTL-SDR Blog V4 (`pyrtlsdr`, `pyrtlsdrlib`)
 - **Inteligência Artificial:** `openai-whisper` (PyTorch), `ollama` (Llama 3.2 1B)
 - **Análise de Dados:** `pandas`, `matplotlib`, `seaborn`
 
@@ -36,7 +36,7 @@ Este repositório contém o código-fonte desenvolvido para o Trabalho de Conclu
 
 ### Pré-requisitos Obrigatórios
 1. **Python 3.10 ou superior:** Instalado no sistema.
-2. **FFmpeg:** Obrigatório para o Whisper. Instale e garanta que está [adicionado ao PATH do Windows](https://phoenixnap.com/kb/ffmpeg-windows).
+2. **FFmpeg:** Obrigatório para o Whisper. Instale e garanta que está [adicionado ao PATH do Windows](https://phoenixnap.com/kb/ffmpeg-windows). O sistema também tentará localizar instalações feitas via `winget` automaticamente.
 3. **Antena RTL-SDR:** Conectada via USB. Você deve instalar os drivers WinUSB corretos usando o software [Zadig](https://zadig.akeo.ie/).
 4. **Ollama:** Instale o [Ollama](https://ollama.com/) e deixe o servidor rodando em segundo plano.
 
@@ -61,9 +61,9 @@ ollama pull llama3.2:1b
 ```
 
 **4. Iniciar a Aplicação:**
-Com a antena ligada e configurada, execute:
+Com a antena ligada e configurada, execute o entry point principal do sistema:
 ```bash
-python app.py
+python main.py
 ```
 
 ---
@@ -72,12 +72,13 @@ python app.py
 
 ```text
 projeto/
-├── app.py                  # Interface principal (PyQt6) e motor DSP
+├── main.py                 # Entry point (Bootstrap de ambiente e variáveis de PATH)
+├── app.py                  # Interface principal (PyQt6) e orquestração de módulos
 ├── requirements.txt        # Lista de dependências Python
 ├── src/
 │   ├── transcricao.py      # Interação com o OpenAI Whisper (STT)
 │   ├── analise.py          # Interrogador do Llama 3.2 e gerador de gráficos
-│   └── captura.py          # Módulo legado de processamento
+│   └── dsp.py              # Motor DSP (hardware SDR, fila IQ, ring buffer)
 ├── dados/                  # Banco de dados CSVs, relatórios e chunks (.wav)
 └── ferramentas/rtl-sdr/    # DLLs e utilitários da RTL-SDR para Windows
 ```
@@ -98,9 +99,10 @@ Este projeto é **Open Source**! A comunidade é muito bem-vinda para explorar o
 
 Caso encontre alguma dificuldade inicial na execução, confira as soluções para os problemas mais comuns relatados pela comunidade:
 
-- **Erro na biblioteca RTL-SDR:** Verifique se a pasta `ferramentas/rtl-sdr/` contém a `rtlsdr.dll` e se você configurou os drivers corretos usando o Zadig. (Usuários Linux/macOS podem precisar compilar a biblioteca localmente).
-- **Falha ao Transcrever Áudio:** Se a aplicação apresentar erros durante o Whisper, o `ffmpeg` provavelmente não foi encontrado pelo sistema. Assegure-se de que ele está instalado e configurado no PATH.
-- **Análise Semântica não inicia:** A IA necessita do servidor Ollama ativo. Verifique se o `ollama serve` está sendo executado em segundo plano.
+- **Erro na biblioteca RTL-SDR:** Verifique se a pasta `ferramentas/rtl-sdr/` contém a `rtlsdr.dll` e se você configurou os drivers corretos usando o Zadig. (Usuários Linux/macOS podem precisar compilar a biblioteca localmente). Se encontrar erros como `AttributeError: function 'rtlsdr_set_dithering' not found`, assegure-se de que a biblioteca pyrtlsdr está atualizada.
+- **Falhas de Conexão com Antena ("Hardware Desconectado"):** O motor DSP (`src/dsp.py`) agora detecta automaticamente e lida de forma graciosa com erros `OSError` e desconexões de antena, emitindo logs e encerrando as threads corretamente para não causar "access violation".
+- **Falha ao Transcrever Áudio:** Se a aplicação apresentar erros durante o Whisper, o `ffmpeg` provavelmente não foi encontrado pelo sistema. Assegure-se de que ele está instalado e configurado no PATH. O `main.py` tenta injetar o caminho do ffmpeg do winget, mas a forma mais segura é adicioná-lo manualmente.
+- **Análise Semântica não inicia:** A IA necessita do servidor Ollama ativo. Verifique se o `ollama serve` está sendo executado em segundo plano. Além disso, o sistema de análise agora lê arquivos CSV legados ou novos de forma inteligente, dispensando conversões manuais.
 
 Sentiu falta de alguma funcionalidade ou conseguiu resolver um bug diferente? **Contribua com o projeto abrindo uma Pull Request!**
 
