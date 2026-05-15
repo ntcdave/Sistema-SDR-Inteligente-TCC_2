@@ -8,7 +8,8 @@ scipy
 sounddevice
 
 # Antena RTL-SDR
-pyrtlsdr
+pyrtlsdr==0.4.0
+pyrtlsdrlib==0.0.4
 
 # Transcrição (Speech-to-Text)
 openai-whisper
